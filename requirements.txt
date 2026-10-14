@@ -1,0 +1,7 @@
+faster-whisper
+sounddevice
+numpy
+ 
+# Библиотеки NVIDIA для работы на GPU (нужны версии под CUDA 12 / cuDNN 9)
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
