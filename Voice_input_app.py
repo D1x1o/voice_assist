@@ -69,7 +69,7 @@ import sounddevice as sd
 # Размер модели Whisper: "tiny", "base", "small", "medium", "large-v3"
 # Чем больше модель — тем точнее распознавание, но дольше загрузка/обработка.
 # "small" — хороший баланс скорости и качества для ru/en.
-MODEL_SIZE = "small"
+MODEL_SIZE = "small" # Конкретно для разработки буду использовать small версию для быстрой отладки
 SAMPLE_RATE = 16000  # Whisper ожидает 16 кГц
 
 # "cuda" — работа на видеокарте NVIDIA (нужны nvidia-cublas-cu12 и
@@ -148,6 +148,8 @@ SEARCH_TRIGGERS = [
     "найди в интернет",
     "поищи в интернете",
     "поищи в интернет",
+    "открой в интернет",
+    "открой в интернете",
     "погугли",
     "загугли",
     "найди",
@@ -177,7 +179,7 @@ def match_command(text):
         if idx != -1:
             query = text[idx + len(trigger):].strip(" ,.:;-—")
             if query:
-                return (lambda q=query: open_search(q)), f'Поиск в интернете: "{query}"'
+                return (lambda q=query: open_search(q)), f'Поиск в интернете: "{query.capitalize()}"'
 
     # Затем — обычные команды по набору ключевых слов
     for keywords, action, label in COMMANDS:
@@ -191,7 +193,10 @@ class VoiceApp:
     def __init__(self, root):
         self.root = root
         root.title("Голосовой ассистент")
-        root.geometry("640x480")
+        width, height = 640, 480
+        x = (root.winfo_screenwidth() - width) // 2
+        y = (root.winfo_screenheight() - height) // 2
+        root.geometry(f"{width}x{height}+{x}+{y}")
         root.minsize(480, 360)
 
         self.model = None
@@ -211,6 +216,7 @@ class VoiceApp:
 
         # ---------- UI ----------
         self.status_var = tk.StringVar(value="Загрузка модели Whisper, подождите...")
+        
 
         self.listen_button = tk.Button(
             root,
@@ -235,15 +241,20 @@ class VoiceApp:
             root, wrap=tk.WORD, font=("Arial", 12), height=15
         )
         self.text_box.pack(fill="both", expand=True, padx=10, pady=10)
-
+        self.text_box.config(state="disabled")
+        
+        
         clear_button = tk.Button(root, text="Очистить текст", command=self.clear_text)
         clear_button.pack(pady=(0, 10))
 
         # Модель грузим в фоне, чтобы окно сразу открывалось
         threading.Thread(target=self.load_model, daemon=True).start()
+        
+        
 
     # ---------- Загрузка модели ----------
     def load_model(self):
+        make_a_log(self,"Начало загрузки модели", "INFO")
         from faster_whisper import WhisperModel
 
         try:
@@ -265,6 +276,7 @@ class VoiceApp:
 
     def _on_model_loaded(self):
         self.status_var.set("Модель загружена. Нажмите кнопку, чтобы начать слушать.")
+        make_a_log(self,"Голосовая модель загружена","INFO")
         self.listen_button.config(state="normal")
 
     # ---------- Включение/выключение прослушивания ----------
@@ -277,6 +289,7 @@ class VoiceApp:
     def start_listening(self):
         self.listen_button.config(state="disabled")
         self.status_var.set("Калибровка микрофона (не говорите)...")
+        make_a_log(self,"Колибровка микрофона","INFO")
         threading.Thread(target=self._calibrate_and_start, daemon=True).start()
 
     def _calibrate_and_start(self):
@@ -314,6 +327,7 @@ class VoiceApp:
         # Запускаем фоновый поток, который разбирает очередь фраз на распознавание
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker_thread.start()
+        make_a_log(self,"Начало записи","INFO")
 
         block_size = int(SAMPLE_RATE * BLOCK_DURATION)
         self.stream = sd.InputStream(
@@ -348,6 +362,7 @@ class VoiceApp:
             text="🎤 Начать прослушивание", bg="#4CAF50", activebackground="#43A047"
         )
         self.status_var.set("Прослушивание остановлено.")
+        make_a_log(self,"Запись остановлена","INFO")
 
     # ---------- Аудио-callback (вызывается в отдельном потоке sounddevice) ----------
     def _audio_callback(self, indata, frames_count, time_info, status):
@@ -379,6 +394,7 @@ class VoiceApp:
             if audio_chunk is None:
                 break
             self.root.after(0, lambda: self.status_var.set("Распознаю фразу..."))
+            make_a_log(self,"Распознование","INFO")
             self._process_chunk(audio_chunk)
 
     def _process_chunk(self, audio_chunk):
@@ -395,7 +411,8 @@ class VoiceApp:
     def _on_phrase_recognized(self, text, language):
         if not text:
             if self.is_listening:
-                self.status_var.set("Слушаю... Говорите (в том числе команды).")
+                self.status_var.set("Слушаю...")
+                make_a_log(self,"Начало записи","INFO")  
             return
 
         action, label = match_command(text)
@@ -403,25 +420,50 @@ class VoiceApp:
         if action is not None:
             try:
                 action()
-                self.status_var.set(f'Выполнено: "{label}" (сказано: {text})')
+                self.status_var.set(f'Выполнено: ' + label)                
             except Exception as e:
+                make_a_log(self,f'Ошибка при выполнении команды "{label}": {e}',"ERROR")  
                 self.status_var.set(f'Ошибка при выполнении команды "{label}": {e}')
-            current = self.text_box.get("1.0", tk.END).strip()
-            separator = " " if current else ""
-            self.text_box.insert(tk.END, f"{separator}[Команда: {label}]")
+            make_a_log(self,f"[Команда: {label}]","INFO")            
             self.text_box.see(tk.END)
-        else:
-            current = self.text_box.get("1.0", tk.END).strip()
-            separator = " " if current else ""
-            self.text_box.insert(tk.END, separator + text)
+        else:      
+            make_a_log(self,f"Язык {language.upper()} : {text}","INPUT")
             self.text_box.see(tk.END)
             if self.is_listening:
-                self.status_var.set(f"Распознано (язык: {language}). Слушаю дальше...")
+                self.status_var.set(f"Распознано (язык: {language.upper()}). Слушаю дальше...")
+        
 
     def clear_text(self):
+        self.text_box.config(state="normal")
         self.text_box.delete("1.0", tk.END)
+        self.text_box.config(state="disabled")
 
-
+def make_a_log(self, log_text, log_type):
+    self.text_box.config(state="normal")
+    colors = {
+                    "green": "#16803D",
+                    "yellow": "#D4A000",
+                    "red": "#DC2626",
+                    "gray": "#808080"
+                }
+    for color_name, hex_color in colors.items():
+        self.text_box.tag_configure(color_name, foreground=hex_color)
+    match (log_type):
+        case "INFO":
+            self.text_box.insert(tk.END, "--- INFO ","green")
+            self.text_box.insert(tk.END, f" {log_text}\n")
+            self.text_box.config(state="disabled")
+            return
+        case "ERROR":
+                self.text_box.insert(tk.END, "--- ERROR ","red")
+                self.text_box.insert(tk.END, f"{log_text}\n")
+                self.text_box.config(state="disabled")
+                return
+        case "INPUT":
+                self.text_box.insert(tk.END, "--- INPUT ","gray")
+                self.text_box.insert(tk.END, f"{log_text}\n")
+                self.text_box.config(state="disabled")
+                return
 if __name__ == "__main__":
     root = tk.Tk()
     app = VoiceApp(root)
